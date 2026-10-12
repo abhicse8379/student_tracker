@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Guidance Tracker</title>
+<style>
+:root{--bg:#f6f7f4;--ink:#1d2b28;--mut:#66726f;--line:#d9dfdb;--card:#fff;--acc:#1f5f4a;--warn:#b3261e;--ok:#2e7d32}
+@media(prefers-color-scheme:dark){:root{--bg:#141a18;--ink:#e6ece9;--mut:#93a09b;--line:#2b3733;--card:#1b2321;--acc:#5fbf9d;--warn:#ff8a80;--ok:#7bd88f}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 Georgia,"Times New Roman",serif}
+h1,h2,h3,button,input,select,textarea,th,.tag{font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+header{display:flex;justify-content:space-between;align-items:center;padding:14px 20px;border-bottom:1px solid var(--line);flex-wrap:wrap;gap:8px}
+header h1{font-size:18px;margin:0}
+main{max-width:980px;margin:0 auto;padding:20px}
+nav button{margin-right:6px}
+button{background:var(--acc);color:var(--bg);border:0;padding:7px 14px;border-radius:6px;cursor:pointer;font-size:14px}
+button.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
+button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+input,select,textarea{width:100%;padding:7px 9px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink);font-size:14px}
+label{display:block;font:600 13px system-ui;margin:10px 0 3px}
+.box{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:16px;margin-bottom:16px}
+.auth{max-width:380px;margin:60px auto}
+.scroll{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-size:13px;color:var(--mut)}
+tr.row{cursor:pointer}tr.row:hover{background:var(--bg)}
+.tag{font-size:12px;padding:2px 8px;border-radius:10px;border:1px solid var(--line);margin-right:4px;display:inline-block}
+.bad{color:var(--warn);border-color:var(--warn)}.good{color:var(--ok);border-color:var(--ok)}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media(max-width:640px){.grid{grid-template-columns:1fr}}
+.mut{color:var(--mut)}.msg{margin:10px 0;font-family:system-ui}
+.chk{display:inline-block;margin:3px 12px 3px 0;font:14px system-ui}.chk input{width:auto}
+</style>
+</head>
+<body>
+<header><h1>Guidance Tracker</h1><div id="top"></div></header>
+<main id="app"></main>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script>
+const SUPABASE_URL = 'https://ccrdeokwccuwnvkiissn.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_iJj_08ZH3f0wa7QGBEUxRQ_tWOMDN8y';
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const $ = s => document.querySelector(s), app = $('#app');
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const STAT = {not_started:'Not started', in_progress:'In progress', submitted:'Submitted', reviewed:'Reviewed'};
+const today = () => new Date().toISOString().slice(0,10);
+const daysAgo = d => d ? Math.floor((Date.now() - new Date(d)) / 864e5) : null;
+const nul = v => v === '' ? null : v;
+let me = null;
+
+async function start() {
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) return authView();
+  const { data } = await sb.from('profiles').select('*').eq('id', session.user.id).single();
+  me = data;
+  $('#top').innerHTML = `<span class="mut">${esc(me?.full_name || me?.email)}</span> <button class="ghost" id="out">Sign out</button>`;
+  $('#out').onclick = async () => { await sb.auth.signOut(); $('#top').innerHTML = ''; authView(); };
+  if (!me || me.status !== 'approved') return app.innerHTML = '<div class="box"><h2>Waiting for approval</h2><p>Your account is registered. You will get access once your guide approves it.</p></div>';
+  me.role === 'admin' ? adminHome() : studentHome();
+}
+
+function authView(mode = 'in') {
+  const up = mode === 'up';
+  app.innerHTML = `<div class="box auth"><h2>${up ? 'Register' : 'Sign in'}</h2><form id="f">
+    ${up ? `<label>Full name</label><input id="n" required>
+    <label>I am working on</label><select id="i"><option value="project">A project</option><option value="research">Research</option></select>` : ''}
+    <label>Email</label><input id="e" type="email" required>
+    <label>Password</label><input id="p" type="password" minlength="8" required>
+    <p class="msg" id="m"></p><button>${up ? 'Create account' : 'Sign in'}</button>
+    <button type="button" class="ghost" id="sw">${up ? 'I have an account' : 'Register as student'}</button></form></div>`;
+  $('#sw').onclick = () => authView(up ? 'in' : 'up');
+  $('#f').onsubmit = async ev => {
+    ev.preventDefault();
+    const email = $('#e').value, password = $('#p').value;
+    const r = up ? await sb.auth.signUp({ email, password, options: { data: { full_name: $('#n').value, interest: $('#i').value } } })
+                 : await sb.auth.signInWithPassword({ email, password });
+    if (r.error) return $('#m').textContent = r.error.message;
+    if (up && !r.data.session) return $('#m').textContent = 'Check your email to confirm, then sign in.';
+    start();
+  };
+}
+
+/* ---------- ADMIN ---------- */
+async function adminHome(tab = 'works') {
+  app.innerHTML = `<nav><button class="${tab==='works'?'':'ghost'}" id="t1">Works</button><button class="${tab==='students'?'':'ghost'}" id="t2">Students</button><button class="${tab==='new'?'':'ghost'}" id="t3">New work</button></nav><div id="v" style="margin-top:16px"></div>`;
+  $('#t1').onclick = () => adminHome('works'); $('#t2').onclick = () => adminHome('students'); $('#t3').onclick = () => adminHome('new');
+  if (tab === 'works') return worksTable();
+  if (tab === 'students') return studentsTable();
+  newWork();
+}
+
+async function worksTable() {
+  const { data: ws, error } = await sb.from('works').select('*, work_members(profiles(full_name)), tasks(status,due_date), meetings(meeting_date)').order('created_at', { ascending: false });
+  if (error) return $('#v').textContent = error.message;
+  window._ws = ws;
+  const rows = ws.map(w => {
+    const done = w.tasks.filter(t => ['submitted','reviewed'].includes(t.status)).length;
+    const lastM = w.meetings.map(m => m.meeting_date).sort().pop();
+    const idle = daysAgo(lastM || w.created_at);
+    const late = w.status === 'active' && w.deadline && w.deadline < today();
+    const overdue = w.tasks.filter(t => t.due_date && t.due_date < today() && !['submitted','reviewed'].includes(t.status)).length;
+    return `<tr class="row" data-id="${w.id}"><td><b>${esc(w.title)}</b><br><span class="tag">${w.kind}</span><span class="tag">${w.status.replace('_',' ')}</span></td>
+      <td>${w.work_members.map(m => esc(m.profiles?.full_name)).join(', ') || '<span class="mut">none</span>'}</td>
+      <td>${esc(w.deadline || '-')} ${late ? '<span class="tag bad">past deadline</span>' : ''}</td>
+      <td>${done}/${w.tasks.length} ${overdue ? `<span class="tag bad">${overdue} overdue</span>` : ''}</td>
+      <td>${lastM || '-'} ${w.status==='active' && idle > 14 ? '<span class="tag bad">idle ' + idle + 'd</span>' : ''}</td></tr>`;
+  }).join('');
+  $('#v').innerHTML = `<div class="box scroll"><table><tr><th>Work</th><th>Students</th><th>Deadline</th><th>Tasks done</th><th>Last meeting</th></tr>${rows || '<tr><td colspan=5 class="mut">No work yet. Create one under New work.</td></tr>'}</table></div><button class="ghost" id="csv">Export CSV</button>`;
+  document.querySelectorAll('tr.row').forEach(r => r.onclick = () => workView(r.dataset.id));
+  $('#csv').onclick = () => {
+    const q = v => '"' + String(v ?? '').replace(/"/g, '""') + '"';
+    const lines = [['Title','Kind','Status','Start','Deadline','Students','Outcome type','Outcome link'].join(',')]
+      .concat(ws.map(w => [w.title,w.kind,w.status,w.start_date,w.deadline,w.work_members.map(m=>m.profiles?.full_name).join('; '),w.outcome_type,w.outcome_link].map(q).join(',')));
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/csv' })); a.download = 'works.csv'; a.click();
+  };
+}
+
+async function studentsTable() {
+  const { data } = await sb.from('profiles').select('*').eq('role', 'student').order('created_at', { ascending: false });
+  $('#v').innerHTML = `<div class="box scroll"><table><tr><th>Name</th><th>Email</th><th>Interest</th><th>Status</th></tr>${(data||[]).map(s => `<tr><td>${esc(s.full_name)}</td><td>${esc(s.email)}</td><td>${s.interest||'-'}</td>
+    <td>${s.status === 'pending' ? `<button data-a="${s.id}">Approve</button>` : '<span class="tag good">approved</span>'}</td></tr>`).join('')}</table></div>`;
+  document.querySelectorAll('[data-a]').forEach(b => b.onclick = async () => { await sb.from('profiles').update({ status: 'approved' }).eq('id', b.dataset.a); studentsTable(); });
+}
+
+async function newWork() {
+  const { data: st } = await sb.from('profiles').select('id,full_name,interest').eq('role', 'student').eq('status', 'approved');
+  $('#v').innerHTML = `<form class="box" id="nf"><h2>New project or research</h2><div class="grid">
+    <div><label>Type</label><select id="k"><option value="project">Project</option><option value="research">Research</option></select></div>
+    <div><label>Title</label><input id="t" required></div>
+    <div><label>Start date</label><input id="s" type="date" value="${today()}"></div>
+    <div><label>Deadline</label><input id="d" type="date"></div></div>
+    <label>Description</label><textarea id="ds" rows="3"></textarea>
+    <label>Students (pick one for individual, several for a group)</label>
+    ${(st||[]).map(s => `<label class="chk"><input type="checkbox" value="${s.id}"> ${esc(s.full_name)} <span class="mut">(${s.interest||'-'})</span></label>`).join('') || '<p class="mut">No approved students yet.</p>'}
+    <p class="msg" id="m"></p><button>Create</button></form>`;
+  $('#nf').onsubmit = async ev => {
+    ev.preventDefault();
+    const { data: w, error } = await sb.from('works').insert({ kind: $('#k').value, title: $('#t').value, description: $('#ds').value, start_date: nul($('#s').value), deadline: nul($('#d').value) }).select().single();
+    if (error) return $('#m').textContent = error.message;
+    const ids = [...document.querySelectorAll('#nf input[type=checkbox]:checked')].map(c => ({ work_id: w.id, student_id: c.value }));
+    if (ids.length) await sb.from('work_members').insert(ids);
+    workView(w.id);
+  };
+}
+
+/* ---------- SHARED WORK DETAIL ---------- */
+async function workView(id) {
+  const adm = me.role === 'admin';
+  const [{ data: w }, { data: tasks }, { data: meets }] = await Promise.all([
+    sb.from('works').select('*, work_members(profiles(full_name))').eq('id', id).single(),
+    sb.from('tasks').select('*').eq('work_id', id).order('due_date', { nullsFirst: false }),
+    sb.from('meetings').select('*').eq('work_id', id).order('meeting_date', { ascending: false })]);
+  const opt = (o, v) => Object.entries(o).map(([k, l]) => `<option value="${k}" ${k === v ? 'selected' : ''}>${l}</option>`).join('');
+  app.innerHTML = `<button class="ghost" id="bk">Back</button>
+  <div class="box" style="margin-top:12px"><h2>${esc(w.title)}</h2><span class="tag">${w.kind}</span>
+    <p>${esc(w.description)}</p><p class="mut">Students: ${w.work_members.map(m => esc(m.profiles?.full_name)).join(', ') || 'none'}<br>
+    ${esc(w.start_date || '')} to ${esc(w.deadline || 'no deadline')}</p>
+    ${adm ? `<label>Status</label><select id="ws">${opt({active:'Active',on_hold:'On hold',completed:'Completed'}, w.status)}</select>` : `<span class="tag">${w.status}</span>`}</div>
+
+  <div class="box"><h3>Tasks</h3><div class="scroll"><table><tr><th>Task</th><th>Due</th><th>Status</th><th>Submission link</th><th>Feedback</th></tr>
+  ${tasks.map(t => `<tr data-t="${t.id}"><td><b>${esc(t.title)}</b><br><span class="mut">${esc(t.description)}</span></td>
+    <td>${esc(t.due_date || '-')}${t.due_date && t.due_date < today() && !['submitted','reviewed'].includes(t.status) ? ' <span class="tag bad">overdue</span>' : ''}</td>
+    <td><select class="ts">${opt(STAT, t.status)}</select></td>
+    <td><input class="tl" value="${esc(t.submission_link)}" placeholder="https://"></td>
+    <td>${adm ? `<input class="tf" value="${esc(t.feedback)}">` : esc(t.feedback)}</td></tr>`).join('') || '<tr><td colspan=5 class="mut">No tasks yet.</td></tr>'}</table></div>
+  ${adm ? `<form id="tf" class="grid" style="margin-top:12px"><div><label>New task</label><input id="tt" required></div><div><label>Due date</label><input id="td" type="date"></div>
+    <div><label>Details</label><input id="tx"></div><div><label>&nbsp;</label><button>Assign task</button></div></form>` : ''}</div>
+
+  <div class="box"><h3>Meeting log</h3>
+  ${meets.map(m => `<p><b>${m.meeting_date}</b>${m.next_meeting ? ` <span class="mut">next: ${m.next_meeting}</span>` : ''}<br>${esc(m.notes)}<br><span class="mut">Action items: ${esc(m.action_items) || '-'}</span></p>`).join('') || '<p class="mut">No meetings logged.</p>'}
+  ${adm ? `<form id="mf"><div class="grid"><div><label>Date</label><input id="md" type="date" value="${today()}"></div><div><label>Next meeting</label><input id="mn" type="date"></div></div>
+    <label>Discussion</label><textarea id="mt" rows="2" required></textarea><label>Action items</label><textarea id="ma" rows="2"></textarea><br><button>Log meeting</button></form>` : ''}</div>
+
+  <div class="box"><h3>Outcome</h3>${adm ? `<form id="of"><div class="grid"><div><label>Type</label><input id="ot" value="${esc(w.outcome_type)}" placeholder="Paper, patent, deployed system, report"></div>
+    <div><label>Link</label><input id="ol" value="${esc(w.outcome_link)}" placeholder="https://"></div></div><label>Notes</label><textarea id="on" rows="2">${esc(w.outcome_notes)}</textarea><br><button>Save outcome</button></form>`
+    : `<p>${esc(w.outcome_type) || 'Not recorded yet'} ${w.outcome_link ? `<a href="${esc(w.outcome_link)}" target="_blank" rel="noopener">link</a>` : ''}</p><p>${esc(w.outcome_notes)}</p>`}</div>`;
+  $('#bk').onclick = () => adm ? adminHome() : studentHome();
+  const save = async tr => {
+    const p = { status: tr.querySelector('.ts').value, submission_link: nul(tr.querySelector('.tl').value) };
+    if (adm) p.feedback = nul(tr.querySelector('.tf').value);
+    const { error } = await sb.from('tasks').update(p).eq('id', tr.dataset.t);
+    if (error) alert(error.message);
+  };
+  document.querySelectorAll('tr[data-t]').forEach(tr => tr.querySelectorAll('select,input').forEach(el => el.onchange = () => save(tr)));
+  if (!adm) return;
+  $('#ws').onchange = async e => { await sb.from('works').update({ status: e.target.value }).eq('id', id); };
+  $('#tf').onsubmit = async e => { e.preventDefault(); await sb.from('tasks').insert({ work_id: id, title: $('#tt').value, description: $('#tx').value, due_date: nul($('#td').value) }); workView(id); };
+  $('#mf').onsubmit = async e => { e.preventDefault(); await sb.from('meetings').insert({ work_id: id, meeting_date: $('#md').value, next_meeting: nul($('#mn').value), notes: $('#mt').value, action_items: $('#ma').value }); workView(id); };
+  $('#of').onsubmit = async e => { e.preventDefault(); await sb.from('works').update({ outcome_type: nul($('#ot').value), outcome_link: nul($('#ol').value), outcome_notes: nul($('#on').value) }).eq('id', id); workView(id); };
+}
+
+/* ---------- STUDENT ---------- */
+async function studentHome() {
+  const { data } = await sb.from('works').select('*, tasks(status,due_date)').order('created_at', { ascending: false });
+  app.innerHTML = `<h2>My work</h2>` + ((data || []).map(w => `<div class="box row" data-id="${w.id}" style="cursor:pointer"><b>${esc(w.title)}</b> <span class="tag">${w.kind}</span><span class="tag">${w.status.replace('_',' ')}</span>
+    <br><span class="mut">Deadline: ${esc(w.deadline || '-')} | Tasks done: ${w.tasks.filter(t => ['submitted','reviewed'].includes(t.status)).length}/${w.tasks.length}</span></div>`).join('') || '<p class="mut">Nothing assigned yet. Your guide will add you to a project or research work.</p>');
+  document.querySelectorAll('.row').forEach(r => r.onclick = () => workView(r.dataset.id));
+}
+
+start();
+</script>
+</body>
+</html>
